@@ -13,7 +13,7 @@ from hopfield import HopfieldNetwork
 from utils import calculate_overlap, add_noise, pattern_to_image, calculate_sampen
 from data import load_mnist_patterns
 
-# ── Centroids from paper (Mellini 2026) ──────────────────────────────────────
+# ── Reference centroids (20-trial ensemble on MNIST digits 0,1,2,8) ─────────
 CENTROID_STD  = (0.834, 0.00749)
 CENTROID_INH  = (0.528, 0.00840)
 
@@ -140,18 +140,18 @@ def interpret_result(overlap, sampen, inhibitory, n_patterns):
         if sampen > 0.010:
             lines.append(f"🌀 **Ceaseless dynamics detected** (SampEn = {sampen:.5f} > 0.010). "
                          "Dale's Principle is breaking the Lyapunov constraint — the network is "
-                         "exhibiting the complex trajectory regime described in §4.2 of the paper.")
+                         "exhibiting complex trajectory behaviour with no fixed-point guarantee.")
         else:
             lines.append(f"SampEn = {sampen:.5f}. Inhibitory network but trajectory is still "
-                         "relatively regular — the frustration is present but not dominant for this input.")
+                         "relatively regular — frustration is present but not dominant for this input.")
     else:
-        lines.append(f"SampEn = {sampen:.5f} — consistent with the standard network centroid "
-                     f"(0.00749 in paper). Monotonic energy descent toward fixed-point attractor.")
+        lines.append(f"SampEn = {sampen:.5f} — monotonic energy descent toward a fixed-point attractor, "
+                     f"consistent with symmetric Hebbian dynamics.")
 
     if alpha > 0.004:
         lines.append(f"⚠️ Memory load α = {alpha:.4f} ({n_patterns} patterns / 784 neurons). "
-                     "MNIST patterns are non-orthogonal — catastrophic forgetting observed at M ≈ 3 "
-                     "in the paper's capacity experiment.")
+                     "MNIST digits share structural overlap — interference between stored patterns "
+                     "increases significantly beyond M = 3.")
     return "\n\n".join(lines)
 
 
@@ -369,7 +369,7 @@ with tab_recall:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_sidebyside:
     st.markdown("### Standard vs Inhibitory — same input, two networks")
-    st.markdown("<div class='metric-label'>Reproduces the core comparison from the paper (§4.1, §4.2)</div>",
+    st.markdown("<div class='metric-label'>Same noisy input run through both architectures simultaneously</div>",
                 unsafe_allow_html=True)
     st.markdown("")
 
@@ -429,7 +429,7 @@ with tab_sidebyside:
                 'Standard networks achieve higher retrieval accuracy by following a monotonic '
                 'gradient descent (low SampEn ≈ 0.007). Inhibitory networks break the Lyapunov '
                 'symmetry via Dale\'s Principle, reducing accuracy but increasing trajectory '
-                'complexity by ~12% — sustaining the <em>ceaseless dynamics</em> characteristic '
+                'complexity — sustaining the <em>ceaseless dynamics</em> characteristic '
                 'of living neural circuits (Larremore et al. 2014).'
                 '</div>', unsafe_allow_html=True)
 
@@ -438,7 +438,7 @@ with tab_sidebyside:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_phasespace:
     st.markdown("### Phase space: Overlap vs Sample Entropy")
-    st.markdown("<div class='metric-label'>Each run is a point. Reference centroids from Mellini (2026) §4.2 shown as ✕</div>",
+    st.markdown("<div class='metric-label'>Each point = one recall trial. ✕ markers = reference centroids from a 20-trial ensemble</div>",
                 unsafe_allow_html=True)
     st.markdown("")
 
@@ -480,11 +480,11 @@ with tab_phasespace:
                     ax.scatter(xs, ys, c=colors[frac], alpha=0.5, s=40,
                                label=labels[frac], edgecolors="none")
 
-            # Paper centroids
+            # Reference centroids
             ax.scatter(*CENTROID_STD, marker="X", s=250, color="#93c5fd",
-                       edgecolors="white", lw=1.5, zorder=5, label=f"Centroid Standard (paper)")
+                       edgecolors="white", lw=1.5, zorder=5, label="Centroid — Standard")
             ax.scatter(*CENTROID_INH, marker="X", s=250, color="#d8b4fe",
-                       edgecolors="white", lw=1.5, zorder=5, label=f"Centroid Inhibitory (paper)")
+                       edgecolors="white", lw=1.5, zorder=5, label="Centroid — Inhibitory")
 
             ax.axvline(0.7, color="#475569", lw=0.8, ls="--", alpha=0.6)
             ax.set_xlabel("Final overlap (recall accuracy)", color="#94a3b8", fontsize=10)
@@ -497,9 +497,9 @@ with tab_phasespace:
             st.markdown(
                 '<div class="explain-box">'
                 'Standard network (blue): clusters in high-accuracy / low-entropy region — '
-                'predictable gradient descent. Inhibitory network (purple): shifts left and up — '
-                'lower accuracy but higher complexity. ✕ markers are reference centroids '
-                'from the paper\'s 20-trial ensemble.'
+                'predictable gradient descent toward fixed-point attractors. '
+                'Inhibitory network (purple): shifts left and up — lower accuracy but higher '
+                'dynamical complexity. ✕ markers show expected centroids from a 20-trial ensemble.'
                 '</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -507,7 +507,7 @@ with tab_phasespace:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_statespace:
     st.markdown("### State space trajectory during recall")
-    st.markdown("<div class='metric-label'>2D projection: overlap with two competing patterns over time (cf. Fig. 4 in paper)</div>",
+    st.markdown("<div class='metric-label'>2D projection of S(t) onto two competing memory patterns — color = time (purple → yellow)</div>",
                 unsafe_allow_html=True)
     st.markdown("")
 
@@ -531,52 +531,117 @@ with tab_statespace:
             pat_a = all_patterns[digit_a]
             pat_b = all_patterns[digit_b]
 
-            fig, axes = plt.subplots(1, 2, figsize=(10, 4.5), facecolor="#0f172a")
+            # Cross-overlaps for placing prototype markers correctly
+            ov_aa = 1.0
+            ov_bb = 1.0
+            ov_ab = float(np.dot(pat_a, pat_b) / 784)  # overlap of pat_a projected onto pat_b axis
+            ov_ba = ov_ab  # symmetric
 
-            for ax_i, (frac, label, color) in enumerate([
-                (0.0, "Standard", "#60a5fa"),
-                (0.2, "Inhibitory (20%)", "#c084fc")
+            fig, axes = plt.subplots(1, 2, figsize=(12, 5.5), facecolor="#0f172a")
+            fig.subplots_adjust(wspace=0.35, bottom=0.22)
+
+            for ax_i, (frac, title, accent) in enumerate([
+                (0.0, "Standard  (Symmetric)", "#60a5fa"),
+                (0.2, "Inhibitory  (20% Dale's Principle)", "#c084fc"),
             ]):
                 ax = axes[ax_i]
-                ax.set_facecolor("#0f172a")
+                ax.set_facecolor("#0a0f1e")
 
                 net_ss = HopfieldNetwork(784, inhibitory_fraction=frac)
                 net_ss.train(patterns)
                 fs, eh, traj_a, traj_b = net_ss.recall_with_trajectory(
-                    noisy_ss.copy(), pat_a, pat_b, max_steps=max_steps, sample_every=15)
+                    noisy_ss.copy(), pat_a, pat_b, max_steps=max_steps, sample_every=10)
 
-                # Color trajectory by time
                 n_pts = len(traj_a)
-                colors_t = cm.plasma(np.linspace(0.1, 0.9, n_pts))
+
+                # ── Trajectory colored by time ────────────────────────────
                 for i in range(n_pts - 1):
-                    ax.plot(traj_a[i:i+2], traj_b[i:i+2], color=colors_t[i], lw=1.5, alpha=0.8)
+                    t_norm = i / max(n_pts - 1, 1)
+                    c_seg  = cm.plasma(0.1 + 0.8 * t_norm)
+                    ax.plot(traj_a[i:i+2], traj_b[i:i+2],
+                            color=c_seg, lw=1.8, alpha=0.85, solid_capstyle="round")
 
-                # Start / End / Prototypes
-                ax.scatter(traj_a[0],  traj_b[0],  s=100, color="#f87171", zorder=5, label="Start (noisy)")
-                ax.scatter(traj_a[-1], traj_b[-1], s=150, color="white",   zorder=5, marker="*", label="End (recalled)")
-                ax.scatter(1.0, calculate_overlap(pat_a, pat_b),
-                           s=80, color="#4ade80", zorder=5, label=f"Perfect '{digit_a}'")
-                ax.scatter(calculate_overlap(pat_b, pat_a), 1.0,
-                           s=80, color="#facc15", zorder=5, label=f"Perfect '{digit_b}'")
+                # ── Directional arrows every ~15% of trajectory ───────────
+                arrow_steps = max(1, n_pts // 7)
+                for i in range(arrow_steps, n_pts - 1, arrow_steps):
+                    dx = traj_a[i] - traj_a[i-1]
+                    dy = traj_b[i] - traj_b[i-1]
+                    if abs(dx) + abs(dy) > 1e-4:
+                        t_norm = i / max(n_pts - 1, 1)
+                        ax.annotate("", xy=(traj_a[i], traj_b[i]),
+                                    xytext=(traj_a[i] - dx*0.4, traj_b[i] - dy*0.4),
+                                    arrowprops=dict(arrowstyle="-|>", color=cm.plasma(0.1 + 0.8*t_norm),
+                                                    lw=1.2, mutation_scale=10))
 
-                ax.set_xlabel(f"Overlap with digit '{digit_a}'", color="#94a3b8", fontsize=9)
-                ax.set_ylabel(f"Overlap with digit '{digit_b}'", color="#94a3b8", fontsize=9)
-                ax.set_title(label, color=color, fontsize=10, fontweight="bold")
-                ax.tick_params(colors="#475569")
+                # ── Start & End points ────────────────────────────────────
+                ax.scatter(traj_a[0], traj_b[0], s=120, color="#f87171",
+                           zorder=6, edgecolors="white", lw=0.8)
+                ax.scatter(traj_a[-1], traj_b[-1], s=180, color="white",
+                           zorder=6, marker="*")
+
+                # ── Prototype attractors — annotated, not in legend ───────
+                ax.scatter(ov_aa, ov_ab, s=90, color="#4ade80",
+                           zorder=5, marker="D", edgecolors="none")
+                ax.annotate(f"  ξ{digit_a}", xy=(ov_aa, ov_ab),
+                            color="#4ade80", fontsize=8, va="center",
+                            fontfamily="monospace")
+
+                ax.scatter(ov_ba, ov_bb, s=90, color="#facc15",
+                           zorder=5, marker="D", edgecolors="none")
+                ax.annotate(f"  ξ{digit_b}", xy=(ov_ba, ov_bb),
+                            color="#facc15", fontsize=8, va="center",
+                            fontfamily="monospace")
+
+                # ── Final overlap labels ──────────────────────────────────
+                final_ov_a = traj_a[-1]
+                final_ov_b = traj_b[-1]
+                ax.annotate(f"end ({final_ov_a:.2f}, {final_ov_b:.2f})",
+                            xy=(traj_a[-1], traj_b[-1]),
+                            xytext=(traj_a[-1] - 0.08, traj_b[-1] + 0.04),
+                            color="#94a3b8", fontsize=7, fontfamily="monospace",
+                            arrowprops=dict(arrowstyle="-", color="#475569", lw=0.6))
+
+                ax.set_xlabel(f"Overlap with  ξ{digit_a}  (digit {digit_a})",
+                              color="#94a3b8", fontsize=9)
+                ax.set_ylabel(f"Overlap with  ξ{digit_b}  (digit {digit_b})",
+                              color="#94a3b8", fontsize=9)
+                ax.set_title(title, color=accent, fontsize=10, fontweight="bold", pad=10)
+                ax.tick_params(colors="#475569", labelsize=8)
                 for sp in ax.spines.values(): sp.set_edgecolor("#1e293b")
-                ax.legend(facecolor="#1e293b", edgecolor="#334155", labelcolor="#cbd5e1",
-                          fontsize=7, loc="upper left")
 
-            fig.suptitle("State Space Trajectories — Purple→Yellow = time progression",
-                         color="#e2e8f0", fontsize=11, y=1.02)
-            plt.tight_layout()
+                ax.set_xlim(-0.05, 1.1)
+                ax.set_ylim(-0.05, 1.1)
+
+            # ── Shared legend below both plots ────────────────────────────
+            from matplotlib.lines import Line2D
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Line2D([0], [0], color=cm.plasma(0.1), lw=2, label="Start of recall"),
+                Line2D([0], [0], color=cm.plasma(0.9), lw=2, label="End of recall"),
+                plt.scatter([], [], s=120, c="#f87171", edgecolors="white", lw=0.8,
+                            label="Start point (noisy input)"),
+                plt.scatter([], [], s=180, c="white", marker="*",
+                            label="End point (recalled state)"),
+                plt.scatter([], [], s=90, c="#4ade80", marker="D",
+                            label=f"Prototype  ξ{digit_a}"),
+                plt.scatter([], [], s=90, c="#facc15", marker="D",
+                            label=f"Prototype  ξ{digit_b}"),
+            ]
+            fig.legend(handles=legend_elements, loc="lower center", ncol=3,
+                       facecolor="#1e293b", edgecolor="#334155", labelcolor="#cbd5e1",
+                       fontsize=8, bbox_to_anchor=(0.5, -0.02))
+
             st.image(fig_to_pil(fig), use_container_width=True)
 
             st.markdown(
                 '<div class="explain-box">'
-                'Standard network: sustained trajectory toward the target attractor (deep basin). '
-                'Inhibitory network: constrained, stalling at lower overlap — structural frustration '
-                'from Dale\'s Principle prevents full descent. Compare with Fig. 4 in the paper.'
+                'Each panel shows how the high-dimensional state S(t) moves through the phase plane '
+                'defined by its overlap with two competing attractors. '
+                '<b>Standard network:</b> directed, sustained trajectory descending into one basin — '
+                'guaranteed by the Lyapunov energy function. '
+                '<b>Inhibitory network:</b> more constrained path — structural frustration from '
+                'Dale\'s Principle prevents full descent into the attractor, stalling at lower overlap. '
+                'Arrows indicate the direction of time.'
                 '</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -584,7 +649,7 @@ with tab_statespace:
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_weights:
     st.markdown("### Synaptic weight matrix W")
-    st.markdown("<div class='metric-label'>Structural comparison of symmetric vs asymmetric architecture (cf. Fig. 1 in paper)</div>",
+    st.markdown("<div class='metric-label'>Structural comparison of symmetric vs asymmetric architecture</div>",
                 unsafe_allow_html=True)
     st.markdown("")
 
@@ -629,8 +694,8 @@ with tab_weights:
 # TAB 6 — NOISE SWEEP
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_sweep:
-    st.markdown("### Noise sweep — reproduce Fig. 2")
-    st.markdown("<div class='metric-label'>Recall accuracy vs η across 10 noise levels, 5 trials each</div>",
+    st.markdown("### Noise sweep — recall accuracy vs η")
+    st.markdown("<div class='metric-label'>Recall accuracy vs η across 10 noise levels, averaged over multiple trials</div>",
                 unsafe_allow_html=True)
     st.markdown("")
 
@@ -670,11 +735,11 @@ with tab_sweep:
                 ax.plot(etas, means, color=color, lw=2, marker="o", ms=5, label=label)
                 ax.fill_between(etas, means - stds, means + stds, color=color, alpha=0.15)
 
-            ax.axvline(0.40, color="#f87171", lw=1, ls="--", alpha=0.7, label="ηc ≈ 0.40 (paper)")
+            ax.axvline(0.40, color="#f87171", lw=1, ls="--", alpha=0.7, label="ηc ≈ 0.40")
             ax.axhline(0.0,  color="#475569", lw=0.6, ls=":")
             ax.set_xlabel("Noise level η (fraction of flipped bits)", color="#94a3b8", fontsize=10)
             ax.set_ylabel("Recall accuracy (overlap)", color="#94a3b8", fontsize=10)
-            ax.set_title("Experiment 1: Robustness to Noise", color="#e2e8f0", fontsize=11)
+            ax.set_title("Robustness to Noise", color="#e2e8f0", fontsize=11)
             ax.set_ylim(-1.1, 1.1)
             ax.legend(facecolor="#1e293b", edgecolor="#334155", labelcolor="#cbd5e1", fontsize=9)
 
@@ -685,12 +750,12 @@ with tab_sweep:
                 'Phase transition from ordered (memory) to disordered (paramagnetic) phase at '
                 'η_c ≈ 0.40. Standard network: sharp transition, higher peak accuracy. '
                 'Inhibitory network: more gradual degradation — biological asymmetry provides '
-                'flexibility but at the cost of absolute fidelity. Compare with Fig. 2 in the paper.'
+                'flexibility but at the cost of absolute retrieval fidelity.'
                 '</div>', unsafe_allow_html=True)
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
     '<div class="metric-label" style="text-align:center">Hopfield Networks · Hebbian Learning · '
-    'Dale\'s Principle · MNIST · Mellini (2026) · Built with Streamlit</div>',
+    'Dale\'s Principle · MNIST · Built with Streamlit</div>',
     unsafe_allow_html=True)
