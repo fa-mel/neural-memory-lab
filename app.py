@@ -81,14 +81,13 @@ def frames_to_gif(frames, duration=60):
     return buf.read()
 
 def canvas_to_pattern(canvas_result):
-    """Convert drawable canvas image to a 784-element bipolar pattern."""
-    img_data = canvas_result.image_data  # RGBA numpy array (H, W, 4)
-    # Use alpha channel: drawn pixels have alpha > 0
-    alpha = img_data[:, :, 3]
-    gray = Image.fromarray(alpha.astype(np.uint8), mode="L")
+    img_data = canvas_result.image_data  # RGBA (H, W, 4)
+    # Use R channel: white stroke=255, black background=0
+    r_channel = img_data[:, :, 0].astype(np.uint8)
+    gray = Image.fromarray(r_channel, mode="L")
     gray_28 = gray.resize((28, 28), Image.LANCZOS)
     arr = np.array(gray_28)
-    return np.where(arr > 30, 1, -1).astype(np.float64)
+    return np.where(arr > 30, 1.0, -1.0).astype(np.float64)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # UI
