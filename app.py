@@ -61,7 +61,7 @@ def plot_energy(energy_history, max_steps):
     return Image.open(buf)
 
 def generate_recall_frames(net, noisy_pattern, animation_steps=600, sample_every=8):
-    state = noisy_pattern.copy()
+    state = np.ascontiguousarray(noisy_pattern, dtype=np.float64)
     frames = [pattern_to_pil(state)]
     for step in range(animation_steps):
         neuron = np.random.randint(net.N)
