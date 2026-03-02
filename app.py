@@ -9,9 +9,9 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(__file__))
-from core.hopfield import HopfieldNetwork
-from core.utils import calculate_overlap, add_noise, pattern_to_image
-from core.data import load_mnist_patterns
+from hopfield import HopfieldNetwork
+from utils import calculate_overlap, add_noise, pattern_to_image
+from data import load_mnist_patterns
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
