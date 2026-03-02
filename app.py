@@ -61,12 +61,14 @@ def plot_energy(energy_history, max_steps):
     return Image.open(buf)
 
 def generate_recall_frames(net, noisy_pattern, animation_steps=600, sample_every=8):
-    state = np.ascontiguousarray(noisy_pattern, dtype=np.float64)
+    state = np.ascontiguousarray(noisy_pattern, dtype=np.float64).flatten()
+    W = np.ascontiguousarray(net.weights, dtype=np.float64)
+    N = W.shape[0]
     frames = [pattern_to_pil(state)]
     for step in range(animation_steps):
-        neuron = np.random.randint(net.N)
-        local_field = np.dot(net.weights[neuron, :], state)
-        state[neuron] = 1.0 if local_field >= 0 else -1.0
+        neuron = int(np.random.randint(0, N))
+        local_field = float(W[neuron].dot(state))
+        state[neuron] = 1.0 if local_field >= 0.0 else -1.0
         if step % sample_every == 0:
             frames.append(pattern_to_pil(state))
     return frames, state
@@ -267,4 +269,3 @@ if run_btn:
 
 st.markdown("---")
 st.caption("Hopfield Network · Hebbian learning · MNIST · Built with Streamlit & Numba")
-
