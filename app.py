@@ -232,12 +232,29 @@ if run_btn:
             st.image(pattern_to_pil(final_state), caption="Network attractor",
                      use_container_width=True)
 
+# ── Guess: find closest stored pattern ───────────────────────────────────
+    overlaps = {d: calculate_overlap(final_state, all_patterns[d]) for d in stored_digits}
+    guessed_digit = max(overlaps, key=overlaps.get)
+    best_overlap = overlaps[guessed_digit]
+
+    st.markdown("---")
+    if input_mode == "Draw your own digit":
+        confidence = "🟢 High" if best_overlap > 0.7 else "🟡 Medium" if best_overlap > 0.4 else "🔴 Low"
+        st.markdown(
+            f"""<div style="text-align:center; padding: 1.5rem; background:#1e1e2e;
+                border-radius:12px; border: 2px solid #a78bfa; margin-bottom:1rem;">
+                <div style="font-size:1rem; color:#888; margin-bottom:0.3rem;">Network guess</div>
+                <div style="font-size:5rem; font-weight:bold; color:#a78bfa; line-height:1">{guessed_digit}</div>
+                <div style="font-size:0.9rem; color:#888; margin-top:0.5rem;">Confidence: {confidence} (overlap: {best_overlap:.2f})</div>
+            </div>""",
+            unsafe_allow_html=True
+        )
+
     # ── Metrics ───────────────────────────────────────────────────────────────
     overlap = calculate_overlap(final_state, input_pattern)
     noisy_overlap = calculate_overlap(noisy, input_pattern)
     recovery = overlap - noisy_overlap
 
-    st.markdown("---")
     m1, m2, m3, m4 = st.columns(4)
 
     def metric_card(col, label, value, color="#a78bfa"):
@@ -248,12 +265,11 @@ if run_btn:
             unsafe_allow_html=True)
 
     metric_card(m1, "Stored patterns", len(stored_digits))
-    metric_card(m2, "Overlap with original", f"{overlap:.3f}",
-                "#34d399" if overlap > 0.8 else "#f87171")
-    metric_card(m3, "Input overlap (noisy)", f"{noisy_overlap:.3f}", "#facc15")
+    metric_card(m2, "Guessed digit", str(guessed_digit), "#a78bfa")
+    metric_card(m3, "Best overlap", f"{best_overlap:.3f}",
+                "#34d399" if best_overlap > 0.7 else "#facc15" if best_overlap > 0.4 else "#f87171")
     metric_card(m4, "Recovery Δ", f"{recovery:+.3f}",
                 "#34d399" if recovery > 0 else "#f87171")
-
     if not animate:
         st.markdown("---")
         st.subheader("📉 Energy landscape")
