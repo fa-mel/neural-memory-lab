@@ -25,4 +25,3 @@ def load_mnist_patterns():
         idx = np.where(y_train == d)[0][0]
         patterns[d] = x_bin[idx]
     return patterns
-
