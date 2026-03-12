@@ -1,761 +1,878 @@
+"""
+🧠 Neural Memory Lab — Hopfield Network Explorer
+Streamlit app for interactively exploring associative memory,
+Dale's Principle, and the standard-vs-inhibitory trade-off.
+
+Mellini (2026) · Physical Methods of Biology · UNIBO
+"""
 import streamlit as st
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import matplotlib
-matplotlib.use("Agg")
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 from PIL import Image
-import io
-import sys, os
+import io, sys, os
 
-sys.path.insert(0, os.path.dirname(__file__))
-from hopfield import HopfieldNetwork
-from utils import calculate_overlap, add_noise, pattern_to_image, calculate_sampen
-from data import load_mnist_patterns
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "core"))
+from core import (
+    HopfieldNetwork, overlap, add_noise, sample_entropy,
+    to_pil, pattern_to_image, frames_to_gif, load_mnist_patterns,
+)
 
-# ── Reference centroids (20-trial ensemble on MNIST digits 0,1,2,8) ─────────
-CENTROID_STD  = (0.834, 0.00749)
-CENTROID_INH  = (0.528, 0.00840)
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CONSTANTS & CONFIG
+# ═══════════════════════════════════════════════════════════════════════════════
+N_NEURONS = 784
+CENTROID_STD = (0.834, 0.00749)
+CENTROID_INH = (0.528, 0.00840)
+BLUE, PURPLE, GREEN, YELLOW, RED, INDIGO = (
+    "#60a5fa", "#c084fc", "#4ade80", "#facc15", "#f87171", "#818cf8"
+)
 
-# ── Page config ───────────────────────────────────────────────────────────────
+def hex_alpha(hex_color, alpha=0.12):
+    """Convert '#aabbcc' → 'rgba(r,g,b,alpha)' for plotly fills."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
 st.set_page_config(page_title="Neural Memory Lab", page_icon="🧠", layout="wide")
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CSS
+# ═══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
-    html, body, [class*="css"] { font-family: 'Syne', sans-serif; }
-    .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
-    h1 { font-family: 'Syne', sans-serif; font-weight: 800; color: #e2e8f0; letter-spacing: -1px; }
-    h2, h3 { font-family: 'Syne', sans-serif; font-weight: 700; color: #94a3b8; }
-    .stTabs [data-baseweb="tab-list"] { gap: 4px; background: #0f172a; padding: 4px; border-radius: 10px; }
-    .stTabs [data-baseweb="tab"] {
-        background: transparent; border-radius: 8px; color: #64748b;
-        font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; padding: 6px 14px;
-    }
-    .stTabs [aria-selected="true"] { background: #1e293b !important; color: #e2e8f0 !important; }
-    .card {
-        background: #0f172a; border: 1px solid #1e293b; border-radius: 12px;
-        padding: 1.2rem; margin-bottom: 0.8rem;
-    }
-    .metric-big { font-size: 2.8rem; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
-    .metric-label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
-    .badge {
-        display: inline-block; padding: 3px 10px; border-radius: 20px;
-        font-size: 0.75rem; font-family: 'JetBrains Mono', monospace; font-weight: 700;
-    }
-    .badge-green  { background: #052e16; color: #4ade80; border: 1px solid #166534; }
-    .badge-yellow { background: #1c1500; color: #facc15; border: 1px solid #713f12; }
-    .badge-red    { background: #1f0a0a; color: #f87171; border: 1px solid #7f1d1d; }
-    .badge-blue   { background: #0a1628; color: #60a5fa; border: 1px solid #1d4ed8; }
-    .explain-box {
-        background: linear-gradient(135deg, #0f172a, #1a1035);
-        border: 1px solid #6d28d9; border-radius: 10px; padding: 1rem 1.2rem;
-        font-size: 0.88rem; color: #c4b5fd; line-height: 1.6;
-    }
-    .warn-box {
-        background: #1c1500; border: 1px solid #713f12; border-radius: 8px;
-        padding: 0.6rem 1rem; font-size: 0.82rem; color: #facc15;
-    }
-    div[data-testid="stImage"] img { border-radius: 8px; }
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+html, body, [class*="css"] { font-family: 'Syne', sans-serif; }
+.block-container { padding-top: 1.2rem; padding-bottom: 1.5rem; }
+h1 { font-weight: 800; letter-spacing: -1px; }
+h2, h3 { font-weight: 700; color: #94a3b8; }
+code, .stCode { font-family: 'JetBrains Mono', monospace !important; }
+.stTabs [data-baseweb="tab-list"] { gap: 4px; background: #0f172a; padding: 4px; border-radius: 10px; }
+.stTabs [data-baseweb="tab"] {
+    background: transparent; border-radius: 8px; color: #64748b;
+    font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; padding: 6px 14px;
+}
+.stTabs [aria-selected="true"] { background: #1e293b !important; color: #e2e8f0 !important; }
+.card {
+    background: #0f172a; border: 1px solid #1e293b; border-radius: 12px;
+    padding: 1rem; margin-bottom: 0.6rem; text-align: center;
+}
+.metric-big { font-size: 2.4rem; font-weight: 800; font-family: 'JetBrains Mono', monospace; line-height: 1.1; }
+.metric-label { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.72rem;
+    font-family: 'JetBrains Mono', monospace; font-weight: 700; }
+.badge-green  { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+.badge-yellow { background: #1c1500; color: #facc15; border: 1px solid #713f12; }
+.badge-red    { background: #1f0a0a; color: #f87171; border: 1px solid #7f1d1d; }
+.explain-box {
+    background: linear-gradient(135deg, #0f172a, #1a1035);
+    border: 1px solid #6d28d9; border-radius: 10px; padding: 1rem 1.2rem;
+    font-size: 0.88rem; color: #c4b5fd; line-height: 1.65;
+}
+.warn-box {
+    background: #1c1500; border: 1px solid #713f12; border-radius: 8px;
+    padding: 0.5rem 0.8rem; font-size: 0.8rem; color: #facc15;
+}
+div[data-testid="stImage"] img { border-radius: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-@st.cache_data
+# ═══════════════════════════════════════════════════════════════════════════════
+#  HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+@st.cache_data(show_spinner="Loading MNIST…")
 def get_patterns():
     return load_mnist_patterns()
 
-def to_pil(pattern, size=196):
-    arr = pattern_to_image(pattern)
-    return Image.fromarray(arr, mode="L").resize((size, size), Image.NEAREST)
 
-def fig_to_pil(fig):
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    return Image.open(buf)
+def make_fig(**kw):
+    """Create a plotly figure with consistent dark styling."""
+    fig = go.Figure()
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15,23,42,0.8)",
+        font=dict(family="JetBrains Mono, monospace", color="#94a3b8", size=11),
+        margin=dict(l=50, r=25, t=45, b=40),
+        **kw
+    )
+    return fig
 
-def dark_fig(w=6, h=3.5):
-    fig, ax = plt.subplots(figsize=(w, h), facecolor="#0f172a")
-    ax.set_facecolor("#0f172a")
-    ax.tick_params(colors="#475569")
-    for sp in ax.spines.values(): sp.set_edgecolor("#1e293b")
-    return fig, ax
 
-def recall_frames(net, noisy, steps, every=8):
-    state = np.ascontiguousarray(noisy, dtype=np.float64).flatten()
-    W = np.ascontiguousarray(net.weights, dtype=np.float64)
-    N = W.shape[0]
-    frames = [to_pil(state)]
-    for s in range(steps):
-        idx = int(np.random.randint(0, N))
-        lf  = float(W[idx].dot(state))
-        state[idx] = 1.0 if lf >= 0.0 else -1.0
-        if s % every == 0:
-            frames.append(to_pil(state))
-    return frames, state
-
-def to_gif(frames, duration=60):
-    buf = io.BytesIO()
-    frames[0].save(buf, format="GIF", save_all=True,
-                   append_images=frames[1:], loop=0, duration=duration)
-    buf.seek(0)
-    return buf.read()
-
-def canvas_to_pattern(canvas_result):
-    r = canvas_result.image_data[:, :, 0].astype(np.uint8)
-    gray_28 = Image.fromarray(r, mode="L").resize((28, 28), Image.LANCZOS)
-    arr = np.array(gray_28)
-    return np.where(arr > 30, 1.0, -1.0).astype(np.float64)
-
-def metric_card(col, label, value, color="#60a5fa"):
+def metric_card(col, label, value, color=INDIGO):
     col.markdown(
-        f'<div class="card" style="text-align:center">'
+        f'<div class="card">'
         f'<div class="metric-big" style="color:{color}">{value}</div>'
         f'<div class="metric-label">{label}</div></div>',
-        unsafe_allow_html=True)
+        unsafe_allow_html=True,
+    )
 
-def interpret_result(overlap, sampen, inhibitory, n_patterns):
-    """Generate physics-grounded explanation of the recall result."""
-    if overlap < 0:
-        return ("⚠️ **Anti-pattern convergence.** The network settled into the inverted attractor "
-                "−ξ, a spurious minimum that always exists due to the even symmetry of the Hebbian "
-                "Hamiltonian. This is more likely with high noise or many stored patterns.")
-    alpha = n_patterns / 784
-    lines = []
-    if overlap > 0.85:
-        lines.append("✅ **Deep attractor convergence.** The recall settled cleanly inside the target "
-                     "basin of attraction — consistent with low-noise, well-separated patterns.")
-    elif overlap > 0.5:
-        lines.append("🟡 **Partial convergence.** The network moved toward the target but did not reach "
-                     "the prototype. This can indicate proximity to the phase transition threshold "
-                     f"(η_c ≈ 0.40) or interference from competing patterns.")
+
+def interpret_result(ov, sampen, inhibitory, n_patterns):
+    """Physics-grounded plain-language interpretation."""
+    if ov < 0:
+        return ("⚠️ **Anti-pattern convergence.** The network settled into the "
+                "inverted attractor −ξ — a spurious minimum that always exists "
+                "due to the ±symmetry of the Hebbian Hamiltonian. More likely "
+                "with high noise or heavy memory load.")
+    alpha = n_patterns / N_NEURONS
+    parts = []
+    if ov > 0.85:
+        parts.append("✅ **Deep attractor convergence.** The recalled state is "
+                      "well inside the target basin — consistent with low noise "
+                      "and well-separated stored patterns.")
+    elif ov > 0.5:
+        parts.append("🟡 **Partial convergence.** The network moved toward the "
+                      "target but stalled short of the prototype. This can "
+                      "indicate proximity to the critical noise threshold "
+                      f"(η_c ≈ 0.40) or cross-talk from similar patterns.")
     else:
-        lines.append("🔴 **Spurious attractor.** The recalled state has low similarity to any stored "
-                     "pattern. Likely causes: noise above critical threshold, or memory overload "
-                     f"(current α = {alpha:.4f}).")
-
+        parts.append("🔴 **Spurious attractor.** Low similarity to any stored "
+                      f"pattern. Likely causes: noise above η_c, or memory "
+                      f"overload (current α = {alpha:.4f}).")
     if inhibitory:
         if sampen > 0.010:
-            lines.append(f"🌀 **Ceaseless dynamics detected** (SampEn = {sampen:.5f} > 0.010). "
-                         "Dale's Principle is breaking the Lyapunov constraint — the network is "
-                         "exhibiting complex trajectory behaviour with no fixed-point guarantee.")
+            parts.append(f"🌀 **Ceaseless dynamics detected** (SampEn = {sampen:.5f}). "
+                         "Dale's Principle broke the Lyapunov constraint — the energy "
+                         "trajectory shows the irregular, non-monotonic regime "
+                         "characteristic of frustrated networks.")
         else:
-            lines.append(f"SampEn = {sampen:.5f}. Inhibitory network but trajectory is still "
-                         "relatively regular — frustration is present but not dominant for this input.")
+            parts.append(f"SampEn = {sampen:.5f}. Inhibitory network but the "
+                         "trajectory is still relatively regular for this input.")
     else:
-        lines.append(f"SampEn = {sampen:.5f} — monotonic energy descent toward a fixed-point attractor, "
-                     f"consistent with symmetric Hebbian dynamics.")
-
+        parts.append(f"SampEn = {sampen:.5f}. Consistent with monotonic energy "
+                     "descent toward a fixed-point attractor (paper centroid: "
+                     "0.00749).")
     if alpha > 0.004:
-        lines.append(f"⚠️ Memory load α = {alpha:.4f} ({n_patterns} patterns / 784 neurons). "
-                     "MNIST digits share structural overlap — interference between stored patterns "
-                     "increases significantly beyond M = 3.")
-    return "\n\n".join(lines)
+        parts.append(f"⚠️ Load α = {alpha:.4f} ({n_patterns}/784). MNIST digits "
+                     "share structure — the paper observes catastrophic forgetting "
+                     "at M ≈ 3.")
+    return "\n\n".join(parts)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# SIDEBAR
-# ═════════════════════════════════════════════════════════════════════════════
+def canvas_to_pattern(canvas_result):
+    """Convert drawable-canvas output to a ±1 pattern."""
+    r = canvas_result.image_data[:, :, 0].astype(np.uint8)
+    gray = Image.fromarray(r, "L").resize((28, 28), Image.LANCZOS)
+    arr = np.array(gray)
+    return np.where(arr > 30, 1.0, -1.0).astype(np.float64)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SIDEBAR
+# ═══════════════════════════════════════════════════════════════════════════════
+all_patterns = get_patterns()
+
 with st.sidebar:
     st.markdown("## 🧠 Neural Memory Lab")
-    st.markdown("<div class='metric-label'>Hopfield Network Explorer</div>", unsafe_allow_html=True)
+    st.caption("Hopfield Network Explorer")
     st.markdown("---")
 
-    st.markdown("**Memory patterns**")
-    stored_digits = st.multiselect("Digits to store", options=list(range(10)),
-                                   default=[0, 1, 3, 5, 8], label_visibility="collapsed")
-
+    st.markdown("**Memory bank**")
+    stored_digits = st.multiselect(
+        "Digits to store", list(range(10)),
+        default=[0, 1, 3, 5, 8], label_visibility="collapsed",
+    )
     n_pat = len(stored_digits)
-    alpha = n_pat / 784
-    alpha_color = "#f87171" if n_pat >= 4 else "#facc15" if n_pat == 3 else "#4ade80"
+    alpha = n_pat / N_NEURONS
+    alpha_c = RED if n_pat >= 4 else YELLOW if n_pat == 3 else GREEN
     st.markdown(
-        f'<div class="card" style="text-align:center; padding:0.6rem">'
-        f'<span style="font-family:JetBrains Mono; color:{alpha_color}; font-size:1.2rem; font-weight:700">'
+        f'<div class="card" style="padding:0.5rem">'
+        f'<span style="font-family:JetBrains Mono;color:{alpha_c};font-size:1.1rem;font-weight:700">'
         f'α = {alpha:.4f}</span><br>'
-        f'<span class="metric-label">load = {n_pat} / 784 neurons</span></div>',
-        unsafe_allow_html=True)
+        f'<span class="metric-label">{n_pat} patterns / {N_NEURONS} neurons</span></div>',
+        unsafe_allow_html=True,
+    )
     if n_pat >= 4:
-        st.markdown('<div class="warn-box">⚠️ MNIST patterns share structure — catastrophic forgetting expected at M ≥ 3</div>',
+        st.markdown('<div class="warn-box">⚠️ Catastrophic forgetting likely '
+                    '(MNIST patterns are non-orthogonal)</div>',
                     unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("**Input**")
-    input_mode = st.radio("Mode", ["MNIST + noise", "Draw digit"], label_visibility="collapsed")
+    input_mode = st.radio("Mode", ["MNIST + noise", "Draw digit"],
+                          label_visibility="collapsed")
 
     if input_mode == "MNIST + noise":
-        test_digit = st.selectbox("Digit to recall", options=stored_digits if stored_digits else [0])
-        noise_pct  = st.slider("Noise level", 0, 50, 25, 5, format="%d%%")
+        test_digit = st.selectbox("Digit to recall",
+                                  options=stored_digits if stored_digits else [0])
+        noise_pct = st.slider("Noise η (%)", 0, 50, 25, 5, format="%d%%")
         noise_level = noise_pct / 100.0
     else:
-        test_digit  = None
-        noise_pct   = 0
-        noise_level = 0.0
+        test_digit, noise_pct, noise_level = None, 0, 0.0
 
     st.markdown("---")
     st.markdown("**Network**")
-    inhibitory = st.checkbox("Inhibitory neurons (20% — Dale's Principle)", value=False)
-    inhibitory_fraction = 0.2 if inhibitory else 0.0
-    max_steps = st.slider("Recall steps", 200, 2000, 1000, 100)
-    animate   = st.checkbox("Animate recall (GIF)", value=True)
+    inhibitory = st.toggle("Inhibitory (20%) — Dale's Principle", value=False)
+    inh_frac = 0.2 if inhibitory else 0.0
+    max_steps = st.slider("Recall steps", 200, 3000, 1500, 100)
 
     st.markdown("---")
-    run_btn = st.button("▶  Run Recall", type="primary", use_container_width=True)
-
-# ── Load data ─────────────────────────────────────────────────────────────────
-with st.spinner("Loading MNIST…"):
-    all_patterns = get_patterns()
 
 if not stored_digits:
     st.warning("Select at least one digit to store.")
     st.stop()
 
-# ── Title ─────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+#  HEADER + TABS
+# ═══════════════════════════════════════════════════════════════════════════════
 st.markdown("# 🧠 Neural Memory Lab")
-st.markdown("<div class='metric-label' style='margin-bottom:1rem'>Hopfield Networks · Hebbian Learning · Dale's Principle</div>",
-            unsafe_allow_html=True)
+st.caption("Hopfield Networks · Hebbian Learning · Dale's Principle · MNIST")
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_recall, tab_sidebyside, tab_phasespace, tab_statespace, tab_weights, tab_sweep = st.tabs([
-    "⚡ Recall", "⚖️ Side-by-Side", "📡 Phase Space", "🌀 State Space", "🔬 Weight Matrix", "📈 Noise Sweep"
+tabs = st.tabs([
+    "⚡ Recall",
+    "⚖️ Comparison",
+    "📡 Phase Space",
+    "🌀 Trajectories",
+    "📊 Experiments",
+    "🔬 Weights",
 ])
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — RECALL
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_recall:
-    c1, c2, c3 = st.columns(3)
+# ═══════════════════════════════════════════════════════════════════════════════
+#  TAB 1 — RECALL LAB
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[0]:
+    col_in, col_cor, col_out = st.columns(3)
 
-    # Input
-    with c1:
+    # -- input column --
+    with col_in:
         st.markdown("### ① Input")
         if input_mode == "MNIST + noise":
             st.image(to_pil(all_patterns[test_digit]),
-                     caption=f"MNIST prototype '{test_digit}'", use_container_width=True)
+                     caption=f"MNIST prototype '{test_digit}'",
+                     use_container_width=True)
             input_pattern = all_patterns[test_digit].copy()
         else:
             try:
                 from streamlit_drawable_canvas import st_canvas
-                cr = st_canvas(stroke_width=18, stroke_color="#FFFFFF",
-                               background_color="#000000", height=196, width=196,
-                               drawing_mode="freedraw", key="canvas_t1")
-                input_pattern = canvas_to_pattern(cr) if cr.image_data is not None else None
-                if input_pattern is None:
-                    st.info("Draw above, then press Run Recall.")
+                st.caption("Draw a digit below, then press **Run Recall**.")
+                cr = st_canvas(
+                    stroke_width=20, stroke_color="#FFFFFF",
+                    background_color="#000000", height=196, width=196,
+                    drawing_mode="freedraw", key="canvas_recall",
+                )
+                if cr.image_data is not None and cr.image_data.sum() > 0:
+                    input_pattern = canvas_to_pattern(cr)
+                else:
+                    input_pattern = None
             except ImportError:
-                st.error("streamlit-drawable-canvas not installed.")
+                st.error("Install `streamlit-drawable-canvas` to enable drawing: "
+                         "`pip install streamlit-drawable-canvas`")
                 input_pattern = None
 
-    with c2:
-        st.markdown("### ② Corrupted")
-        if not run_btn:
-            st.info("Press ▶ Run Recall")
-    with c3:
-        st.markdown("### ③ Recalled")
-        if not run_btn:
-            st.info("Results will appear here")
+    run = st.button("▶  Run Recall", type="primary", use_container_width=True,
+                    key="btn_recall")
 
-    if run_btn:
+    with col_cor:
+        st.markdown("### ② Corrupted")
+    with col_out:
+        st.markdown("### ③ Recalled")
+
+    if run:
         if input_mode == "Draw digit" and input_pattern is None:
-            st.warning("Draw something first!")
+            st.warning("Draw something on the canvas first.")
             st.stop()
 
         patterns = [all_patterns[d] for d in stored_digits]
-        with st.spinner("Training network…"):
-            net = HopfieldNetwork(784, inhibitory_fraction=inhibitory_fraction)
-            net.train(patterns)
+        net = HopfieldNetwork(N_NEURONS, inhibitory_fraction=inh_frac)
+        net.train(patterns)
 
-        noisy = (add_noise(input_pattern, noise_level, seed=42)
-                 if input_mode == "MNIST + noise"
-                 else np.ascontiguousarray(input_pattern, dtype=np.float64).flatten())
+        if input_mode == "MNIST + noise":
+            noisy = add_noise(input_pattern, noise_level, seed=42)
+        else:
+            noisy = np.ascontiguousarray(input_pattern, dtype=np.float64).flatten()
 
-        with c2:
-            st.image(to_pil(noisy),
-                     caption=f"{'Noise: ' + str(noise_pct) + '%' if input_mode == 'MNIST + noise' else 'Hand-drawn input'}",
+        with col_cor:
+            lbl = f"Noise η = {noise_pct}%" if input_mode == "MNIST + noise" else "Your drawing"
+            st.image(to_pil(noisy), caption=lbl, use_container_width=True)
+
+        # Single recall pass — snapshots + energy in one go
+        with st.spinner("Recalling…"):
+            res = net.recall(noisy, max_steps=max_steps,
+                             snapshot_every=max(1, max_steps // 80), seed=42)
+
+        final = res["state"]
+        energy = res["energy"]
+        snapshots = res["snapshots"]
+
+        with col_out:
+            st.image(to_pil(final), caption="Recalled attractor",
                      use_container_width=True)
 
-        if animate:
-            with st.spinner("Generating recall animation…"):
-                frames, final_state = recall_frames(net, noisy, max_steps)
-            with c3:
-                st.image(to_gif(frames), caption="Asynchronous recall", use_container_width=True)
-        else:
-            with st.spinner("Running recall…"):
-                final_state, energy_history = net.recall(noisy, max_steps=max_steps, record_energy=True)
-            with c3:
-                st.image(to_pil(final_state), caption="Recalled attractor", use_container_width=True)
+        # -- Animation slider --
+        if len(snapshots) > 1:
+            st.markdown("#### 🎞️ Recall animation")
+            col_slider, col_dl = st.columns([5, 1])
+            with col_slider:
+                frame_idx = st.slider(
+                    "Scrub through recall", 0, len(snapshots) - 1,
+                    len(snapshots) - 1, key="frame_slider",
+                    help="Drag to watch the network converge step by step",
+                )
+            with col_dl:
+                gif_bytes = frames_to_gif(
+                    [to_pil(s, 112) for s in snapshots], duration_ms=50
+                )
+                st.download_button("⬇ GIF", gif_bytes, "recall.gif",
+                                   mime="image/gif", use_container_width=True)
 
-        # Energy + SampEn
-        if not animate:
-            _, energy_history = net.recall(noisy, max_steps=max_steps, record_energy=True)
-        else:
-            _, energy_history = net.recall(noisy, max_steps=max_steps, record_energy=True)
+            fc1, fc2, fc3 = st.columns([1, 2, 1])
+            with fc2:
+                st.image(to_pil(snapshots[frame_idx], 224),
+                         caption=f"Frame {frame_idx}/{len(snapshots)-1}",
+                         use_container_width=True)
 
-        sampen = calculate_sampen(energy_history)
+        # -- Energy plot with step marker --
+        st.markdown("#### 📉 Energy landscape")
+        step_mark = frame_idx * (max_steps // 80) if len(snapshots) > 1 else max_steps
+        fig_e = make_fig(
+            title="Energy during asynchronous recall",
+            xaxis_title="Update step",
+            yaxis_title="E(S)",
+            height=280,
+        )
+        fig_e.add_trace(go.Scatter(
+            y=energy, mode="lines", line=dict(color=INDIGO, width=1.5),
+            name="Energy", hovertemplate="Step %{x}<br>E = %{y:.1f}",
+        ))
+        if len(snapshots) > 1:
+            fig_e.add_vline(x=step_mark, line_dash="dot", line_color=YELLOW,
+                            annotation_text=f"frame {frame_idx}")
+        st.plotly_chart(fig_e, use_container_width=True)
 
-        # Guess
-        overlaps_all = {d: calculate_overlap(final_state, all_patterns[d]) for d in stored_digits}
+        # -- Metrics --
+        sampen = sample_entropy(energy)
+        overlaps_all = {d: overlap(final, all_patterns[d]) for d in stored_digits}
         guessed = max(overlaps_all, key=overlaps_all.get)
-        best_ov  = overlaps_all[guessed]
-
-        # Anti-pattern check
-        is_anti = best_ov < 0
-
-        st.markdown("---")
-
-        if input_mode == "Draw digit":
-            conf_badge = ("badge-green" if best_ov > 0.7 else
-                          "badge-yellow" if best_ov > 0.4 else "badge-red")
-            conf_text  = ("High" if best_ov > 0.7 else
-                          "Medium" if best_ov > 0.4 else "Low")
-            st.markdown(
-                f'<div class="card" style="text-align:center; padding:1.5rem">'
-                f'<div class="metric-label" style="margin-bottom:6px">Network guess</div>'
-                f'<div style="font-size:5rem; font-weight:800; font-family:JetBrains Mono; '
-                f'color:#818cf8; line-height:1">'
-                f'{"?" if is_anti else guessed}</div>'
-                f'<div style="margin-top:8px">'
-                f'<span class="badge {conf_badge}">{conf_text} confidence</span>'
-                f'</div>'
-                f'<div class="metric-label" style="margin-top:6px">overlap = {best_ov:.3f}</div>'
-                f'</div>', unsafe_allow_html=True)
-
-        # Metric cards
-        overlap_v = calculate_overlap(final_state, input_pattern)
-        recovery  = overlap_v - calculate_overlap(noisy, input_pattern)
+        best_ov = overlaps_all[guessed]
+        ov_target = overlap(final, input_pattern)
+        recovery = ov_target - overlap(noisy, input_pattern)
 
         m1, m2, m3, m4, m5 = st.columns(5)
-        metric_card(m1, "Stored patterns",   str(n_pat),             "#818cf8")
-        metric_card(m2, "Guessed digit",     "?" if is_anti else str(guessed), "#818cf8")
-        metric_card(m3, "Overlap",           f"{overlap_v:.3f}",
-                    "#4ade80" if overlap_v > 0.8 else "#facc15" if overlap_v > 0.4 else "#f87171")
-        metric_card(m4, "Recovery Δ",        f"{recovery:+.3f}",
-                    "#4ade80" if recovery > 0 else "#f87171")
-        metric_card(m5, "SampEn",            f"{sampen:.5f}",
-                    "#f87171" if sampen > 0.010 else "#60a5fa")
+        metric_card(m1, "Stored", str(n_pat), INDIGO)
+        metric_card(m2, "Guessed", "?" if best_ov < 0 else str(guessed), INDIGO)
+        metric_card(m3, "Overlap",
+                    f"{ov_target:.3f}",
+                    GREEN if ov_target > 0.8 else YELLOW if ov_target > 0.4 else RED)
+        metric_card(m4, "Recovery Δ",
+                    f"{recovery:+.3f}",
+                    GREEN if recovery > 0 else RED)
+        metric_card(m5, "SampEn",
+                    f"{sampen:.5f}",
+                    RED if sampen > 0.010 else BLUE)
 
-        # Energy plot
-        if not animate:
-            st.markdown("#### 📉 Energy landscape")
-            fig, ax = dark_fig(8, 2.8)
-            ax.plot(energy_history, color="#818cf8", lw=1.0)
-            ax.set_xlabel("Update step", color="#64748b", fontsize=9)
-            ax.set_ylabel("E", color="#64748b", fontsize=9)
-            ax.set_title("Energy during recall", color="#94a3b8", fontsize=10)
-            st.image(fig_to_pil(fig), use_container_width=True)
+        # -- Draw-mode guess --
+        if input_mode == "Draw digit":
+            badge = ("badge-green" if best_ov > 0.7 else
+                     "badge-yellow" if best_ov > 0.4 else "badge-red")
+            conf = "High" if best_ov > 0.7 else "Medium" if best_ov > 0.4 else "Low"
+            st.markdown(
+                f'<div class="card" style="padding:1.2rem">'
+                f'<div class="metric-label" style="margin-bottom:4px">Best match</div>'
+                f'<div style="font-size:4rem;font-weight:800;font-family:JetBrains Mono;'
+                f'color:{INDIGO};line-height:1">{"?" if best_ov < 0 else guessed}</div>'
+                f'<span class="badge {badge}">{conf} — overlap {best_ov:.3f}</span></div>',
+                unsafe_allow_html=True,
+            )
 
-        # Explain
-        st.markdown("#### 🔬 Physics interpretation")
-        explanation = interpret_result(overlap_v, sampen, inhibitory, n_pat)
-        st.markdown(f'<div class="explain-box">{explanation}</div>', unsafe_allow_html=True)
+        # -- Physics interpretation --
+        st.markdown("#### 🔬 Interpretation")
+        st.markdown(
+            f'<div class="explain-box">{interpret_result(ov_target, sampen, inhibitory, n_pat)}</div>',
+            unsafe_allow_html=True,
+        )
 
-        # Gallery
-        st.markdown("---")
-        st.markdown("#### 🗃️ Stored patterns")
-        gcols = st.columns(len(stored_digits))
-        for col, d in zip(gcols, stored_digits):
-            col.image(to_pil(all_patterns[d], 90), caption=f"Digit {d}", use_container_width=True)
+        # -- Stored gallery --
+        with st.expander("🗃️ Stored memory bank", expanded=False):
+            gcols = st.columns(min(len(stored_digits), 10))
+            for c, d in zip(gcols, stored_digits):
+                ov_d = overlaps_all.get(d, 0)
+                border = "3px solid #4ade80" if d == guessed else "1px solid #1e293b"
+                c.image(to_pil(all_patterns[d], 84),
+                        caption=f"{'→ ' if d==guessed else ''}{d}  ({ov_d:.2f})",
+                        use_container_width=True)
 
-        st.session_state["last_result"] = {
-            "final_state": final_state, "noisy": noisy,
-            "overlap": overlap_v, "sampen": sampen,
-            "net": net, "input_pattern": input_pattern,
-            "inhibitory": inhibitory, "energy": energy_history
+        # Persist for other tabs
+        st.session_state["last_recall"] = {
+            "final": final, "noisy": noisy, "energy": energy,
+            "sampen": sampen, "net": net, "input_pattern": input_pattern,
         }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — SIDE BY SIDE
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_sidebyside:
-    st.markdown("### Standard vs Inhibitory — same input, two networks")
-    st.markdown("<div class='metric-label'>Same noisy input run through both architectures simultaneously</div>",
-                unsafe_allow_html=True)
-    st.markdown("")
+# ═══════════════════════════════════════════════════════════════════════════════
+#  TAB 2 — SIDE-BY-SIDE COMPARISON
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[1]:
+    st.markdown("### Standard vs Inhibitory — same noisy input, two architectures")
+    st.caption("Reproduces the core comparison from §4.1 and §4.2 of the paper")
 
     if input_mode != "MNIST + noise":
-        st.info("Switch to **MNIST + noise** mode in the sidebar to use this tab.")
+        st.info("Switch to **MNIST + noise** in the sidebar to use this tab.")
     else:
-        run_sbs = st.button("▶  Run Side-by-Side Comparison", type="primary")
-
-        if run_sbs:
+        run_cmp = st.button("▶  Run Comparison", type="primary", key="btn_cmp")
+        if run_cmp:
             patterns = [all_patterns[d] for d in stored_digits]
-            noisy_sbs = add_noise(all_patterns[test_digit], noise_level, seed=42)
+            noisy_cmp = add_noise(all_patterns[test_digit], noise_level, seed=42)
 
-            col_std, col_inh = st.columns(2)
+            col_s, col_i = st.columns(2)
 
             for col, frac, label, accent in [
-                (col_std, 0.0, "Standard (Symmetric)", "#60a5fa"),
-                (col_inh, 0.2, "Inhibitory 20% — Dale's Principle", "#c084fc"),
+                (col_s, 0.0, "Standard (Symmetric)", BLUE),
+                (col_i, 0.2, "Inhibitory 20%", PURPLE),
             ]:
                 with col:
                     st.markdown(f"#### {label}")
-                    net_i = HopfieldNetwork(784, inhibitory_fraction=frac)
-                    net_i.train(patterns)
+                    net_c = HopfieldNetwork(N_NEURONS, inhibitory_fraction=frac)
+                    net_c.train(patterns)
+                    rc = net_c.recall(noisy_cmp.copy(), max_steps=max_steps, seed=42)
+                    fs, eh = rc["state"], rc["energy"]
 
-                    with st.spinner(f"Recalling ({label})…"):
-                        fs, eh = net_i.recall(noisy_sbs.copy(), max_steps=max_steps, record_energy=True)
+                    st.image(to_pil(fs), caption="Recalled", use_container_width=True)
 
-                    ov  = calculate_overlap(fs, all_patterns[test_digit])
-                    se  = calculate_sampen(eh)
-                    rec = ov - calculate_overlap(noisy_sbs, all_patterns[test_digit])
+                    ov_c = overlap(fs, all_patterns[test_digit])
+                    se_c = sample_entropy(eh)
+                    rec_c = ov_c - overlap(noisy_cmp, all_patterns[test_digit])
 
-                    st.image(to_pil(fs), caption="Recalled pattern", use_container_width=True)
-
-                    st.markdown(
-                        f'<div class="card" style="text-align:center">'
-                        f'<span class="metric-big" style="color:{accent}">{ov:.3f}</span><br>'
-                        f'<span class="metric-label">Final overlap</span></div>',
-                        unsafe_allow_html=True)
-
-                    m1, m2 = st.columns(2)
-                    metric_card(m1, "Recovery Δ", f"{rec:+.3f}",
-                                "#4ade80" if rec > 0 else "#f87171")
-                    metric_card(m2, "SampEn", f"{se:.5f}",
-                                "#f87171" if se > 0.010 else accent)
+                    metric_card(st, "Overlap", f"{ov_c:.3f}",
+                                GREEN if ov_c > 0.8 else YELLOW if ov_c > 0.4 else RED)
+                    m1c, m2c = st.columns(2)
+                    metric_card(m1c, "Recovery Δ", f"{rec_c:+.3f}",
+                                GREEN if rec_c > 0 else RED)
+                    metric_card(m2c, "SampEn", f"{se_c:.5f}",
+                                RED if se_c > 0.010 else accent)
 
                     # Energy
-                    fig, ax = dark_fig(5, 2.5)
-                    ax.plot(eh, color=accent, lw=1.0)
-                    ax.set_title("Energy", color="#94a3b8", fontsize=9)
-                    ax.set_xlabel("step", color="#64748b", fontsize=8)
-                    st.image(fig_to_pil(fig), use_container_width=True)
+                    fig_c = make_fig(title="Energy", height=220,
+                                     xaxis_title="step", yaxis_title="E")
+                    fig_c.add_trace(go.Scatter(
+                        y=eh, mode="lines", line=dict(color=accent, width=1.2),
+                        hovertemplate="Step %{x}<br>E=%{y:.1f}",
+                    ))
+                    st.plotly_chart(fig_c, use_container_width=True)
 
-            # Summary comparison
             st.markdown("---")
-            st.markdown("#### Key trade-off")
             st.markdown(
                 '<div class="explain-box">'
-                'Standard networks achieve higher retrieval accuracy by following a monotonic '
-                'gradient descent (low SampEn ≈ 0.007). Inhibitory networks break the Lyapunov '
-                'symmetry via Dale\'s Principle, reducing accuracy but increasing trajectory '
-                'complexity — sustaining the <em>ceaseless dynamics</em> characteristic '
-                'of living neural circuits (Larremore et al. 2014).'
-                '</div>', unsafe_allow_html=True)
+                '<b>Trade-off:</b> The standard network follows a monotonic gradient '
+                'descent (low SampEn ≈ 0.007) and achieves higher recall fidelity. '
+                'The inhibitory network breaks Lyapunov symmetry via Dale\'s Principle '
+                '— accuracy drops but trajectory complexity increases ~12%, sustaining '
+                'the <em>ceaseless dynamics</em> of living neural circuits '
+                '(Larremore et al. 2014).</div>',
+                unsafe_allow_html=True,
+            )
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — PHASE SPACE
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_phasespace:
+# ═══════════════════════════════════════════════════════════════════════════════
+#  TAB 3 — PHASE SPACE
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[2]:
     st.markdown("### Phase space: Overlap vs Sample Entropy")
-    st.markdown("<div class='metric-label'>Each point = one recall trial. ✕ markers = reference centroids from a 20-trial ensemble</div>",
-                unsafe_allow_html=True)
-    st.markdown("")
-
-    run_ps = st.button("▶  Run Phase Space Experiment (20 trials)", type="primary")
-
-    if run_ps:
-        if input_mode != "MNIST + noise":
-            st.info("Switch to MNIST + noise mode.")
-        else:
-            patterns = [all_patterns[d] for d in stored_digits]
-            results = {0.0: [], 0.2: []}
-
-            progress = st.progress(0)
-            total = 40
-            done  = 0
-
-            for frac in [0.0, 0.2]:
-                net_ps = HopfieldNetwork(784, inhibitory_fraction=frac)
-                net_ps.train(patterns)
-                for trial in range(20):
-                    seed = trial * 7
-                    noisy_t = add_noise(all_patterns[test_digit], noise_level, seed=seed)
-                    fs, eh  = net_ps.recall(noisy_t, max_steps=max_steps, record_energy=True)
-                    ov = calculate_overlap(fs, all_patterns[test_digit])
-                    se = calculate_sampen(eh)
-                    if ov > 0:
-                        results[frac].append((ov, se))
-                    done += 1
-                    progress.progress(done / total)
-
-            fig, ax = dark_fig(8, 5)
-
-            colors = {0.0: "#60a5fa", 0.2: "#c084fc"}
-            labels = {0.0: "Standard", 0.2: "Inhibitory (20%)"}
-
-            for frac, pts in results.items():
-                if pts:
-                    xs, ys = zip(*pts)
-                    ax.scatter(xs, ys, c=colors[frac], alpha=0.5, s=40,
-                               label=labels[frac], edgecolors="none")
-
-            # Reference centroids
-            ax.scatter(*CENTROID_STD, marker="X", s=250, color="#93c5fd",
-                       edgecolors="white", lw=1.5, zorder=5, label="Centroid — Standard")
-            ax.scatter(*CENTROID_INH, marker="X", s=250, color="#d8b4fe",
-                       edgecolors="white", lw=1.5, zorder=5, label="Centroid — Inhibitory")
-
-            ax.axvline(0.7, color="#475569", lw=0.8, ls="--", alpha=0.6)
-            ax.set_xlabel("Final overlap (recall accuracy)", color="#94a3b8", fontsize=10)
-            ax.set_ylabel("Sample Entropy (trajectory complexity)", color="#94a3b8", fontsize=10)
-            ax.set_title("Phase Space: Accuracy vs Dynamical Complexity", color="#e2e8f0", fontsize=11)
-            ax.legend(facecolor="#1e293b", edgecolor="#334155", labelcolor="#cbd5e1", fontsize=9)
-
-            st.image(fig_to_pil(fig), use_container_width=True)
-
-            st.markdown(
-                '<div class="explain-box">'
-                'Standard network (blue): clusters in high-accuracy / low-entropy region — '
-                'predictable gradient descent toward fixed-point attractors. '
-                'Inhibitory network (purple): shifts left and up — lower accuracy but higher '
-                'dynamical complexity. ✕ markers show expected centroids from a 20-trial ensemble.'
-                '</div>', unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — STATE SPACE TRAJECTORY
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_statespace:
-    st.markdown("### State space trajectory during recall")
-    st.markdown("<div class='metric-label'>2D projection of S(t) onto two competing memory patterns — color = time (purple → yellow)</div>",
-                unsafe_allow_html=True)
-    st.markdown("")
+    st.caption("Each dot = one trial.  ✕ = reference centroids from the paper (§4.2)")
 
     if input_mode != "MNIST + noise":
-        st.info("Switch to MNIST + noise mode.")
+        st.info("Switch to **MNIST + noise** mode.")
+    else:
+        c_n, _ = st.columns([1, 3])
+        with c_n:
+            n_trials_ps = st.slider("Trials per network", 5, 30, 15, key="ps_trials")
+        run_ps = st.button("▶  Run Phase Space Experiment", type="primary", key="btn_ps")
+
+        if run_ps:
+            patterns = [all_patterns[d] for d in stored_digits]
+            data_ps = {0.0: [], 0.2: []}
+            bar = st.progress(0, text="Running ensemble…")
+            total = 2 * n_trials_ps
+            done = 0
+
+            for frac in [0.0, 0.2]:
+                net_ps = HopfieldNetwork(N_NEURONS, inhibitory_fraction=frac)
+                net_ps.train(patterns)
+                for t in range(n_trials_ps):
+                    n_t = add_noise(all_patterns[test_digit], noise_level, seed=t * 7)
+                    r = net_ps.recall(n_t, max_steps=max_steps, seed=t * 7 + 1)
+                    ov_t = overlap(r["state"], all_patterns[test_digit])
+                    se_t = sample_entropy(r["energy"])
+                    if ov_t > 0:
+                        data_ps[frac].append((ov_t, se_t))
+                    done += 1
+                    bar.progress(done / total, text=f"Trial {done}/{total}")
+            bar.empty()
+
+            fig_ps = make_fig(
+                title="Accuracy vs Dynamical Complexity",
+                xaxis_title="Final overlap (accuracy)",
+                yaxis_title="Sample Entropy (complexity)",
+                height=480,
+            )
+            for frac, color, name in [(0.0, BLUE, "Standard"), (0.2, PURPLE, "Inhibitory (20%)")]:
+                pts = data_ps[frac]
+                if pts:
+                    xs, ys = zip(*pts)
+                    fig_ps.add_trace(go.Scatter(
+                        x=xs, y=ys, mode="markers", name=name,
+                        marker=dict(color=color, size=8, opacity=0.6),
+                        hovertemplate="Overlap: %{x:.3f}<br>SampEn: %{y:.5f}",
+                    ))
+
+            # Paper centroids
+            fig_ps.add_trace(go.Scatter(
+                x=[CENTROID_STD[0]], y=[CENTROID_STD[1]], mode="markers",
+                name="Centroid Standard (paper)",
+                marker=dict(symbol="x", size=16, color="#93c5fd",
+                            line=dict(width=2, color="white")),
+            ))
+            fig_ps.add_trace(go.Scatter(
+                x=[CENTROID_INH[0]], y=[CENTROID_INH[1]], mode="markers",
+                name="Centroid Inhibitory (paper)",
+                marker=dict(symbol="x", size=16, color="#d8b4fe",
+                            line=dict(width=2, color="white")),
+            ))
+            fig_ps.add_vline(x=0.7, line_dash="dash", line_color="#475569",
+                             annotation_text="success threshold", annotation_font_color="#64748b")
+            st.plotly_chart(fig_ps, use_container_width=True)
+
+            st.markdown(
+                '<div class="explain-box">'
+                'Standard (blue) clusters in high-accuracy / low-entropy — '
+                'predictable gradient descent to deep minima. '
+                'Inhibitory (purple) shifts left and up — lower accuracy but '
+                'higher complexity. The ✕ markers are the paper\'s reference centroids '
+                'from a 20-trial ensemble.</div>',
+                unsafe_allow_html=True,
+            )
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  TAB 4 — STATE-SPACE TRAJECTORIES
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[3]:
+    st.markdown("### State-space trajectory during recall")
+    st.caption("2D projection: overlap with two competing stored patterns over time (cf. Fig. 4)")
+
+    if input_mode != "MNIST + noise":
+        st.info("Switch to **MNIST + noise** mode.")
     elif len(stored_digits) < 2:
         st.info("Store at least 2 patterns to see competing trajectories.")
     else:
-        c1, c2 = st.columns(2)
-        with c1:
-            digit_a = st.selectbox("Pattern A (x-axis)", stored_digits, index=0, key="ss_a")
-        with c2:
-            remaining = [d for d in stored_digits if d != digit_a]
-            digit_b = st.selectbox("Pattern B (y-axis)", remaining, index=0, key="ss_b")
+        ca, cb = st.columns(2)
+        with ca:
+            digit_a = st.selectbox("Pattern A (x-axis)", stored_digits, index=0, key="traj_a")
+        with cb:
+            rest = [d for d in stored_digits if d != digit_a]
+            digit_b = st.selectbox("Pattern B (y-axis)", rest, index=0, key="traj_b")
 
-        run_ss = st.button("▶  Run Trajectory Analysis", type="primary")
+        run_traj = st.button("▶  Run Trajectory Analysis", type="primary", key="btn_traj")
 
-        if run_ss:
-            noisy_ss = add_noise(all_patterns[test_digit], noise_level, seed=42)
-            patterns  = [all_patterns[d] for d in stored_digits]
+        if run_traj:
+            patterns = [all_patterns[d] for d in stored_digits]
+            noisy_traj = add_noise(all_patterns[test_digit], noise_level, seed=42)
             pat_a = all_patterns[digit_a]
             pat_b = all_patterns[digit_b]
 
-            # Cross-overlaps for placing prototype markers correctly
-            ov_aa = 1.0
-            ov_bb = 1.0
-            ov_ab = float(np.dot(pat_a, pat_b) / 784)  # overlap of pat_a projected onto pat_b axis
-            ov_ba = ov_ab  # symmetric
+            fig_traj = make_subplots(
+                rows=1, cols=2,
+                subplot_titles=["Standard (Symmetric)", "Inhibitory 20%"],
+                horizontal_spacing=0.08,
+            )
+            fig_traj.update_layout(
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(15,23,42,0.8)",
+                font=dict(family="JetBrains Mono, monospace", color="#94a3b8", size=11),
+                margin=dict(l=50, r=25, t=55, b=50),
+                height=480,
+                showlegend=False,
+            )
 
-            fig, axes = plt.subplots(1, 2, figsize=(12, 5.5), facecolor="#0f172a")
-            fig.subplots_adjust(wspace=0.35, bottom=0.22)
+            for idx_plot, (frac, accent) in enumerate([(0.0, BLUE), (0.2, PURPLE)]):
+                net_t = HopfieldNetwork(N_NEURONS, inhibitory_fraction=frac)
+                net_t.train(patterns)
+                rt = net_t.recall(
+                    noisy_traj.copy(), max_steps=max_steps,
+                    trajectory_patterns=(pat_a, pat_b), seed=42,
+                )
+                ta, tb = rt["traj_a"], rt["traj_b"]
+                n_pts = len(ta)
+                col_idx = idx_plot + 1
 
-            for ax_i, (frac, title, accent) in enumerate([
-                (0.0, "Standard  (Symmetric)", "#60a5fa"),
-                (0.2, "Inhibitory  (20% Dale's Principle)", "#c084fc"),
-            ]):
-                ax = axes[ax_i]
-                ax.set_facecolor("#0a0f1e")
+                # Color by time: build segments
+                cmap = px.colors.sample_colorscale("Plasma",
+                                                   np.linspace(0.1, 0.9, n_pts))
 
-                net_ss = HopfieldNetwork(784, inhibitory_fraction=frac)
-                net_ss.train(patterns)
-                fs, eh, traj_a, traj_b = net_ss.recall_with_trajectory(
-                    noisy_ss.copy(), pat_a, pat_b, max_steps=max_steps, sample_every=10)
-
-                n_pts = len(traj_a)
-
-                # ── Trajectory colored by time ────────────────────────────
                 for i in range(n_pts - 1):
-                    t_norm = i / max(n_pts - 1, 1)
-                    c_seg  = cm.plasma(0.1 + 0.8 * t_norm)
-                    ax.plot(traj_a[i:i+2], traj_b[i:i+2],
-                            color=c_seg, lw=1.8, alpha=0.85, solid_capstyle="round")
+                    fig_traj.add_trace(go.Scatter(
+                        x=ta[i:i+2], y=tb[i:i+2], mode="lines",
+                        line=dict(color=cmap[i], width=2.5),
+                        showlegend=False,
+                        hovertemplate=f"Step ~{i*20}<br>O_a=%{{x:.3f}}<br>O_b=%{{y:.3f}}",
+                    ), row=1, col=col_idx)
 
-                # ── Directional arrows every ~15% of trajectory ───────────
-                arrow_steps = max(1, n_pts // 7)
-                for i in range(arrow_steps, n_pts - 1, arrow_steps):
-                    dx = traj_a[i] - traj_a[i-1]
-                    dy = traj_b[i] - traj_b[i-1]
-                    if abs(dx) + abs(dy) > 1e-4:
-                        t_norm = i / max(n_pts - 1, 1)
-                        ax.annotate("", xy=(traj_a[i], traj_b[i]),
-                                    xytext=(traj_a[i] - dx*0.4, traj_b[i] - dy*0.4),
-                                    arrowprops=dict(arrowstyle="-|>", color=cm.plasma(0.1 + 0.8*t_norm),
-                                                    lw=1.2, mutation_scale=10))
+                # Start / End / Prototypes
+                fig_traj.add_trace(go.Scatter(
+                    x=[ta[0]], y=[tb[0]], mode="markers",
+                    marker=dict(size=12, color=RED, symbol="circle"),
+                    name="Start",
+                ), row=1, col=col_idx)
+                fig_traj.add_trace(go.Scatter(
+                    x=[ta[-1]], y=[tb[-1]], mode="markers",
+                    marker=dict(size=14, color="white", symbol="star"),
+                    name="End",
+                ), row=1, col=col_idx)
+                ov_ab = overlap(pat_a, pat_b)
+                fig_traj.add_trace(go.Scatter(
+                    x=[1.0], y=[ov_ab], mode="markers",
+                    marker=dict(size=10, color=GREEN),
+                    name=f"Perfect '{digit_a}'",
+                ), row=1, col=col_idx)
+                fig_traj.add_trace(go.Scatter(
+                    x=[ov_ab], y=[1.0], mode="markers",
+                    marker=dict(size=10, color=YELLOW),
+                    name=f"Perfect '{digit_b}'",
+                ), row=1, col=col_idx)
 
-                # ── Start & End points ────────────────────────────────────
-                ax.scatter(traj_a[0], traj_b[0], s=120, color="#f87171",
-                           zorder=6, edgecolors="white", lw=0.8)
-                ax.scatter(traj_a[-1], traj_b[-1], s=180, color="white",
-                           zorder=6, marker="*")
+                fig_traj.update_xaxes(title_text=f"Overlap '{digit_a}'", row=1, col=col_idx)
+                fig_traj.update_yaxes(title_text=f"Overlap '{digit_b}'", row=1, col=col_idx)
 
-                # ── Prototype attractors — annotated, not in legend ───────
-                ax.scatter(ov_aa, ov_ab, s=90, color="#4ade80",
-                           zorder=5, marker="D", edgecolors="none")
-                ax.annotate(f"  ξ{digit_a}", xy=(ov_aa, ov_ab),
-                            color="#4ade80", fontsize=8, va="center",
-                            fontfamily="monospace")
-
-                ax.scatter(ov_ba, ov_bb, s=90, color="#facc15",
-                           zorder=5, marker="D", edgecolors="none")
-                ax.annotate(f"  ξ{digit_b}", xy=(ov_ba, ov_bb),
-                            color="#facc15", fontsize=8, va="center",
-                            fontfamily="monospace")
-
-                # ── Final overlap labels ──────────────────────────────────
-                final_ov_a = traj_a[-1]
-                final_ov_b = traj_b[-1]
-                ax.annotate(f"end ({final_ov_a:.2f}, {final_ov_b:.2f})",
-                            xy=(traj_a[-1], traj_b[-1]),
-                            xytext=(traj_a[-1] - 0.08, traj_b[-1] + 0.04),
-                            color="#94a3b8", fontsize=7, fontfamily="monospace",
-                            arrowprops=dict(arrowstyle="-", color="#475569", lw=0.6))
-
-                ax.set_xlabel(f"Overlap with  ξ{digit_a}  (digit {digit_a})",
-                              color="#94a3b8", fontsize=9)
-                ax.set_ylabel(f"Overlap with  ξ{digit_b}  (digit {digit_b})",
-                              color="#94a3b8", fontsize=9)
-                ax.set_title(title, color=accent, fontsize=10, fontweight="bold", pad=10)
-                ax.tick_params(colors="#475569", labelsize=8)
-                for sp in ax.spines.values(): sp.set_edgecolor("#1e293b")
-
-                ax.set_xlim(-0.05, 1.1)
-                ax.set_ylim(-0.05, 1.1)
-
-            # ── Shared legend below both plots ────────────────────────────
-            from matplotlib.lines import Line2D
-            from matplotlib.patches import Patch
-            legend_elements = [
-                Line2D([0], [0], color=cm.plasma(0.1), lw=2, label="Start of recall"),
-                Line2D([0], [0], color=cm.plasma(0.9), lw=2, label="End of recall"),
-                plt.scatter([], [], s=120, c="#f87171", edgecolors="white", lw=0.8,
-                            label="Start point (noisy input)"),
-                plt.scatter([], [], s=180, c="white", marker="*",
-                            label="End point (recalled state)"),
-                plt.scatter([], [], s=90, c="#4ade80", marker="D",
-                            label=f"Prototype  ξ{digit_a}"),
-                plt.scatter([], [], s=90, c="#facc15", marker="D",
-                            label=f"Prototype  ξ{digit_b}"),
-            ]
-            fig.legend(handles=legend_elements, loc="lower center", ncol=3,
-                       facecolor="#1e293b", edgecolor="#334155", labelcolor="#cbd5e1",
-                       fontsize=8, bbox_to_anchor=(0.5, -0.02))
-
-            st.image(fig_to_pil(fig), use_container_width=True)
+            st.plotly_chart(fig_traj, use_container_width=True)
 
             st.markdown(
                 '<div class="explain-box">'
-                'Each panel shows how the high-dimensional state S(t) moves through the phase plane '
-                'defined by its overlap with two competing attractors. '
-                '<b>Standard network:</b> directed, sustained trajectory descending into one basin — '
-                'guaranteed by the Lyapunov energy function. '
-                '<b>Inhibitory network:</b> more constrained path — structural frustration from '
-                'Dale\'s Principle prevents full descent into the attractor, stalling at lower overlap. '
-                'Arrows indicate the direction of time.'
-                '</div>', unsafe_allow_html=True)
+                'Path colour goes from dark (start) to bright (end). '
+                '<b>Standard:</b> sustained trajectory driving straight toward the target attractor. '
+                '<b>Inhibitory:</b> constrained, wandering path — structural frustration from '
+                'Dale\'s Principle prevents the full descent into the basin. '
+                'Red dot = noisy start, white star = final state.</div>',
+                unsafe_allow_html=True,
+            )
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — WEIGHT MATRIX
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_weights:
+# ═══════════════════════════════════════════════════════════════════════════════
+#  TAB 5 — EXPERIMENTS (NOISE SWEEP + CAPACITY)
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[4]:
+    exp_a, exp_b = st.tabs(["📈 Noise Robustness", "📉 Memory Capacity"])
+
+    # ── 5A: Noise sweep ──────────────────────────────────────────────────
+    with exp_a:
+        st.markdown("### Recall accuracy vs noise level")
+        st.caption("Reproduces Fig. 2 — phase transition from memory to paramagnetic phase")
+
+        if input_mode != "MNIST + noise":
+            st.info("Switch to **MNIST + noise** mode.")
+        else:
+            c1e, c2e = st.columns(2)
+            with c1e:
+                n_trials_sw = st.slider("Trials per point", 3, 20, 5, key="sw_trials")
+            with c2e:
+                n_levels = st.slider("Noise levels", 5, 20, 11, key="sw_levels")
+
+            run_sw = st.button("▶  Run Noise Sweep", type="primary", key="btn_sw")
+            if run_sw:
+                patterns = [all_patterns[d] for d in stored_digits]
+                noise_vals = np.linspace(0.0, 0.5, n_levels)
+                sweep_data = {0.0: [], 0.2: []}
+                total = 2 * n_levels * n_trials_sw
+                bar = st.progress(0, text="Sweeping…")
+                done = 0
+
+                for frac in [0.0, 0.2]:
+                    net_sw = HopfieldNetwork(N_NEURONS, inhibitory_fraction=frac)
+                    net_sw.train(patterns)
+                    for eta in noise_vals:
+                        ovs = []
+                        for t in range(n_trials_sw):
+                            nt = add_noise(all_patterns[test_digit], eta, seed=t * 13)
+                            r = net_sw.recall(nt, max_steps=max_steps,
+                                              seed=t * 13 + 1)
+                            ovs.append(overlap(r["state"], all_patterns[test_digit]))
+                            done += 1
+                            bar.progress(done / total, text=f"{done}/{total}")
+                        sweep_data[frac].append((eta, np.mean(ovs), np.std(ovs)))
+                bar.empty()
+
+                fig_sw = make_fig(
+                    title="Experiment 1: Robustness to Noise",
+                    xaxis_title="Noise η (fraction of flipped bits)",
+                    yaxis_title="Recall accuracy (overlap)",
+                    height=430,
+                    yaxis=dict(range=[-1.1, 1.1]),
+                )
+                for frac, color, name in [(0.0, BLUE, "Standard"),
+                                          (0.2, PURPLE, "Inhibitory (20%)")]:
+                    etas = [r[0] for r in sweep_data[frac]]
+                    means = np.array([r[1] for r in sweep_data[frac]])
+                    stds = np.array([r[2] for r in sweep_data[frac]])
+                    fig_sw.add_trace(go.Scatter(
+                        x=etas, y=means, mode="lines+markers", name=name,
+                        line=dict(color=color, width=2),
+                        marker=dict(size=6),
+                        hovertemplate="η=%{x:.2f}<br>O=%{y:.3f}",
+                    ))
+                    fig_sw.add_trace(go.Scatter(
+                        x=list(etas) + list(etas)[::-1],
+                        y=list(means + stds) + list(means - stds)[::-1],
+                        fill="toself", fillcolor=hex_alpha(color),
+                        line=dict(width=0), showlegend=False, hoverinfo="skip",
+                    ))
+                fig_sw.add_vline(x=0.40, line_dash="dash", line_color=RED,
+                                 annotation_text="ηc ≈ 0.40")
+                fig_sw.add_hline(y=0, line_dash="dot", line_color="#475569")
+                st.plotly_chart(fig_sw, use_container_width=True)
+
+                st.markdown(
+                    '<div class="explain-box">'
+                    'Phase transition at η_c ≈ 0.40: below this threshold the '
+                    'network corrects errors; above it, recall collapses. '
+                    'Standard network shows a sharper transition and higher peak accuracy. '
+                    'Inhibitory network degrades more gradually — biological asymmetry '
+                    'provides flexibility at the cost of absolute fidelity.</div>',
+                    unsafe_allow_html=True,
+                )
+
+    # ── 5B: Capacity ─────────────────────────────────────────────────────
+    with exp_b:
+        st.markdown("### Memory capacity — recall accuracy vs stored patterns")
+        st.caption("Reproduces Fig. 5 — catastrophic forgetting with correlated MNIST patterns")
+
+        c1cap, c2cap = st.columns(2)
+        with c1cap:
+            n_trials_cap = st.slider("Trials per point", 3, 15, 5, key="cap_trials")
+        with c2cap:
+            fixed_noise = st.slider("Fixed noise η", 0.0, 0.3, 0.10, 0.05,
+                                    key="cap_noise", format="%.2f")
+        max_M = min(10, len(stored_digits))
+        if max_M < 2:
+            st.info("Store at least 2 digits to test capacity.")
+        else:
+            run_cap = st.button("▶  Run Capacity Experiment", type="primary", key="btn_cap")
+            if run_cap:
+                cap_data = {0.0: [], 0.2: []}
+                total = 2 * max_M * n_trials_cap
+                bar = st.progress(0, text="Testing capacity…")
+                done = 0
+
+                for frac in [0.0, 0.2]:
+                    for M in range(1, max_M + 1):
+                        pats = [all_patterns[stored_digits[i]] for i in range(M)]
+                        net_cap = HopfieldNetwork(N_NEURONS, inhibitory_fraction=frac)
+                        net_cap.train(pats)
+                        ovs = []
+                        for t in range(n_trials_cap):
+                            tgt_idx = t % M
+                            tgt = pats[tgt_idx]
+                            nt = add_noise(tgt, fixed_noise, seed=t * 11 + M)
+                            r = net_cap.recall(nt, max_steps=max_steps,
+                                               seed=t * 11 + M + 1)
+                            ovs.append(overlap(r["state"], tgt))
+                            done += 1
+                            bar.progress(done / total, text=f"{done}/{total}")
+                        cap_data[frac].append((M, np.mean(ovs), np.std(ovs)))
+                bar.empty()
+
+                fig_cap = make_fig(
+                    title="Experiment 3: Memory Capacity",
+                    xaxis_title="Number of stored patterns M",
+                    yaxis_title="Average recall accuracy",
+                    height=430,
+                    xaxis=dict(dtick=1),
+                )
+                for frac, color, name in [(0.0, BLUE, "Standard"),
+                                          (0.2, PURPLE, "Inhibitory (20%)")]:
+                    Ms = [r[0] for r in cap_data[frac]]
+                    means = np.array([r[1] for r in cap_data[frac]])
+                    stds = np.array([r[2] for r in cap_data[frac]])
+                    fig_cap.add_trace(go.Scatter(
+                        x=Ms, y=means, mode="lines+markers", name=name,
+                        line=dict(color=color, width=2), marker=dict(size=7),
+                        hovertemplate="M=%{x}<br>Accuracy=%{y:.3f}",
+                    ))
+                    fig_cap.add_trace(go.Scatter(
+                        x=list(Ms) + list(Ms)[::-1],
+                        y=list(means + stds) + list(means - stds)[::-1],
+                        fill="toself",
+                        fillcolor=hex_alpha(color),
+                        line=dict(width=0), showlegend=False, hoverinfo="skip",
+                    ))
+
+                # Theoretical limit annotation
+                fig_cap.add_annotation(
+                    x=max_M, y=0.05, text=f"Theoretical limit: M ≈ 0.138N = 108",
+                    showarrow=False, font=dict(size=10, color="#64748b"),
+                )
+                st.plotly_chart(fig_cap, use_container_width=True)
+
+                st.markdown(
+                    '<div class="explain-box">'
+                    'The theoretical Hopfield capacity is M ≈ 0.138N ≈ 108 patterns '
+                    'for N=784, but this assumes random, orthogonal patterns. '
+                    'MNIST digits share significant spatial structure, so catastrophic '
+                    'forgetting begins at M ≈ 3. The symmetric network maintains deeper '
+                    'basins (higher capacity), while inhibitory asymmetry reduces basin '
+                    'depth and increases susceptibility to spurious states.</div>',
+                    unsafe_allow_html=True,
+                )
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  TAB 6 — WEIGHT MATRIX
+# ═══════════════════════════════════════════════════════════════════════════════
+with tabs[5]:
     st.markdown("### Synaptic weight matrix W")
-    st.markdown("<div class='metric-label'>Structural comparison of symmetric vs asymmetric architecture</div>",
-                unsafe_allow_html=True)
-    st.markdown("")
+    st.caption("Structural comparison: symmetric vs asymmetric architecture (cf. Fig. 1)")
 
-    run_wm = st.button("▶  Visualise Weight Matrices", type="primary")
+    run_wm = st.button("▶  Visualise Weight Matrices", type="primary", key="btn_wm")
 
     if run_wm:
         patterns = [all_patterns[d] for d in stored_digits]
 
-        fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), facecolor="#0f172a")
+        fig_wm = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=["Standard (Symmetric)", "Inhibitory 20% (Asymmetric)"],
+            horizontal_spacing=0.06,
+        )
+        fig_wm.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(15,23,42,0.8)",
+            font=dict(family="JetBrains Mono, monospace", color="#94a3b8", size=11),
+            margin=dict(l=50, r=25, t=55, b=50),
+            height=500,
+        )
 
-        for ax_i, (frac, label) in enumerate([(0.0, "Standard (Symmetric)"), (0.2, "Inhibitory (Asymmetric)")]):
-            net_wm = HopfieldNetwork(784, inhibitory_fraction=frac)
+        for idx_wm, (frac, label) in enumerate([(0.0, "Standard"), (0.2, "Inhibitory")]):
+            net_wm = HopfieldNetwork(N_NEURONS, inhibitory_fraction=frac)
             net_wm.train(patterns)
-            W = net_wm.weights
 
-            ax = axes[ax_i]
-            ax.set_facecolor("#0f172a")
-            im = ax.imshow(W, cmap="RdYlGn", vmin=-1, vmax=1, aspect="auto")
-            ax.set_title(label, color="#e2e8f0", fontsize=10, fontweight="bold")
-            ax.set_xlabel("Neuron j", color="#64748b", fontsize=8)
-            ax.set_ylabel("Neuron i", color="#64748b", fontsize=8)
-            ax.tick_params(colors="#475569", labelsize=7)
-            for sp in ax.spines.values(): sp.set_edgecolor("#1e293b")
-            plt.colorbar(im, ax=ax, fraction=0.03).ax.tick_params(colors="#94a3b8", labelsize=7)
+            # Downsample for performance: show every 8th neuron
+            step = 8
+            W_sub = net_wm.weights[::step, ::step]
+            fig_wm.add_trace(go.Heatmap(
+                z=W_sub, colorscale="RdYlGn", zmin=-1, zmax=1,
+                showscale=(idx_wm == 1),
+                hovertemplate=f"{label}<br>i=%{{y}}, j=%{{x}}<br>w=%{{z:.4f}}",
+            ), row=1, col=idx_wm + 1)
+            fig_wm.update_xaxes(title_text="Neuron j", row=1, col=idx_wm + 1)
+            fig_wm.update_yaxes(title_text="Neuron i", row=1, col=idx_wm + 1)
 
-        fig.suptitle("Visualization of Synaptic Weight Matrix W",
-                     color="#e2e8f0", fontsize=12, y=1.02)
-        plt.tight_layout()
-        st.image(fig_to_pil(fig), use_container_width=True)
+        st.plotly_chart(fig_wm, use_container_width=True)
 
         st.markdown(
             '<div class="explain-box">'
-            '<b>Left (Standard):</b> perfectly symmetric across the diagonal (w_ij = w_ji) — '
-            'an undirected graph. The weight matrix is a valid Lyapunov function.<br><br>'
-            '<b>Right (Inhibitory):</b> specific columns are flipped to all-negative values '
-            '(striped pattern). These are the inhibitory neurons. The asymmetry breaks '
-            'w_ij = w_ji, converting the network into a weighted directed graph — and '
-            'removing the guarantee of convergence to a fixed point.'
-            '</div>', unsafe_allow_html=True)
+            '<b>Left (Standard):</b> perfectly symmetric across the diagonal '
+            '(w<sub>ij</sub> = w<sub>ji</sub>) — an undirected graph. '
+            'W is a valid Lyapunov function.<br><br>'
+            '<b>Right (Inhibitory):</b> columns corresponding to inhibitory neurons '
+            'are flipped to all-negative (visible as vertical stripes). '
+            'This breaks w<sub>ij</sub> = w<sub>ji</sub>, converting the network '
+            'into a directed graph and removing the convergence guarantee.<br><br>'
+            '<i>Showing every 8th neuron for performance. Full matrix is 784×784.</i></div>',
+            unsafe_allow_html=True,
+        )
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 6 — NOISE SWEEP
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_sweep:
-    st.markdown("### Noise sweep — recall accuracy vs η")
-    st.markdown("<div class='metric-label'>Recall accuracy vs η across 10 noise levels, averaged over multiple trials</div>",
-                unsafe_allow_html=True)
-    st.markdown("")
-
-    if input_mode != "MNIST + noise":
-        st.info("Switch to MNIST + noise mode.")
-    else:
-        n_trials = st.slider("Trials per noise level", 3, 20, 5)
-        run_sweep = st.button("▶  Run Noise Sweep", type="primary")
-
-        if run_sweep:
-            patterns   = [all_patterns[d] for d in stored_digits]
-            noise_vals = np.linspace(0.0, 0.5, 11)
-            results    = {0.0: [], 0.2: []}
-            progress   = st.progress(0)
-            total_runs = len(noise_vals) * 2 * n_trials
-            done       = 0
-
-            for frac in [0.0, 0.2]:
-                net_sw = HopfieldNetwork(784, inhibitory_fraction=frac)
-                net_sw.train(patterns)
-                for eta in noise_vals:
-                    run_ovs = []
-                    for t in range(n_trials):
-                        noisy_t = add_noise(all_patterns[test_digit], eta, seed=t*13)
-                        fs, _   = net_sw.recall(noisy_t, max_steps=max_steps, record_energy=False)
-                        run_ovs.append(calculate_overlap(fs, all_patterns[test_digit]))
-                        done += 1
-                        progress.progress(done / total_runs)
-                    results[frac].append((eta, np.mean(run_ovs), np.std(run_ovs)))
-
-            fig, ax = dark_fig(8, 4.5)
-
-            for frac, color, label in [(0.0, "#60a5fa", "Standard"), (0.2, "#c084fc", "Inhibitory (20%)")]:
-                etas   = [r[0] for r in results[frac]]
-                means  = np.array([r[1] for r in results[frac]])
-                stds   = np.array([r[2] for r in results[frac]])
-                ax.plot(etas, means, color=color, lw=2, marker="o", ms=5, label=label)
-                ax.fill_between(etas, means - stds, means + stds, color=color, alpha=0.15)
-
-            ax.axvline(0.40, color="#f87171", lw=1, ls="--", alpha=0.7, label="ηc ≈ 0.40")
-            ax.axhline(0.0,  color="#475569", lw=0.6, ls=":")
-            ax.set_xlabel("Noise level η (fraction of flipped bits)", color="#94a3b8", fontsize=10)
-            ax.set_ylabel("Recall accuracy (overlap)", color="#94a3b8", fontsize=10)
-            ax.set_title("Robustness to Noise", color="#e2e8f0", fontsize=11)
-            ax.set_ylim(-1.1, 1.1)
-            ax.legend(facecolor="#1e293b", edgecolor="#334155", labelcolor="#cbd5e1", fontsize=9)
-
-            st.image(fig_to_pil(fig), use_container_width=True)
-
-            st.markdown(
-                '<div class="explain-box">'
-                'Phase transition from ordered (memory) to disordered (paramagnetic) phase at '
-                'η_c ≈ 0.40. Standard network: sharp transition, higher peak accuracy. '
-                'Inhibitory network: more gradual degradation — biological asymmetry provides '
-                'flexibility but at the cost of absolute retrieval fidelity.'
-                '</div>', unsafe_allow_html=True)
-
-# ── Footer ────────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+#  FOOTER
+# ═══════════════════════════════════════════════════════════════════════════════
 st.markdown("---")
 st.markdown(
-    '<div class="metric-label" style="text-align:center">Hopfield Networks · Hebbian Learning · '
-    'Dale\'s Principle · MNIST · Built with Streamlit</div>',
-    unsafe_allow_html=True)
+    '<div class="metric-label" style="text-align:center">'
+    'Hopfield Networks · Hebbian Learning · Dale\'s Principle · '
+    'Mellini (2026) — Physical Methods of Biology, UNIBO</div>',
+    unsafe_allow_html=True,
+)
