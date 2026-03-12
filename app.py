@@ -13,7 +13,7 @@ from plotly.subplots import make_subplots
 from PIL import Image
 import io, sys, os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "core"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import (
     HopfieldNetwork, overlap, add_noise, sample_entropy,
     to_pil, pattern_to_image, frames_to_gif, load_mnist_patterns,
