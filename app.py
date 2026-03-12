@@ -14,10 +14,9 @@ from PIL import Image
 import io, sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from core import (
-    HopfieldNetwork, overlap, add_noise, sample_entropy,
-    to_pil, pattern_to_image, frames_to_gif, load_mnist_patterns,
-)
+from hopfield import HopfieldNetwork
+from utils import overlap, add_noise, sample_entropy, to_pil, pattern_to_image, frames_to_gif
+from data import load_mnist_patterns
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CONSTANTS & CONFIG
